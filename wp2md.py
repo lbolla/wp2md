@@ -11,7 +11,7 @@ import re
 import sys
 import time
 import traceback
-from xml.etree.ElementTree import XMLParser
+from xml.etree.ElementTree import XMLParser, TreeBuilder
 
 sys.path.insert(0, 'lib')
 import html2text
@@ -27,6 +27,12 @@ __url__ = 'https://github.com/dreikanter/wp2md'
 
 # XML elements to save (starred ones are additional fields
 # generated during export data processing)
+FIELD_MAP = {
+        'creator': 'author',
+        'post_date': 'date',
+        'description': 'summary',
+        }
+
 WHAT2SAVE = {
     'channel': [
         'title',
@@ -45,6 +51,8 @@ WHAT2SAVE = {
         'title',
         'link',
         'creator',
+        'category',
+        'tags',
         'description',
         'post_id',
         'post_date',
@@ -459,7 +467,13 @@ def dump_item(data):
     fields = WHAT2SAVE['item']
     pdata = {}
     for field in fields:
-        pdata[field] = data.get(field, '')
+        if field == 'category':
+            pdata['category'] = ','.join(data['categories'])
+        elif field == 'tags':
+            pdata['tags'] = ','.join(data['tags'])
+        else:
+            pdata[field] = data.get(field, '')
+
 
     # Post date
     format = conf['date_fmt']
@@ -479,6 +493,52 @@ def dump_item(data):
         statplusplus('comment', len(data['comments']))
 
 
+#def dump(file_name, data, order):
+#    """Dumps a dictionary to YAML-like text file."""
+#    try:
+#        dir_path = os.path.dirname(os.path.abspath(file_name))
+#        if dir_path and not os.path.exists(dir_path):
+#            os.makedirs(dir_path)
+
+#        with codecs.open(file_name, 'w', 'utf-8') as f:
+#            extras = {}
+#            for field in filter(lambda x: x in data, [item for item in order]):
+#                if field in ['content', 'comments', 'excerpt']:
+#                    # Fields for non-standard processing
+#                    extras[field] = data[field]
+#                else:
+#                    if type(data[field]) == time.struct_time:
+#                        value = time.strftime(conf['date_fmt'], data[field])
+#                    else:
+#                        value = data[field] or ''
+#                    f.write(u"%s: %s\n" % (unicode(field), unicode(value)))
+
+#            if extras:
+#                excerpt = extras.get('excerpt', '')
+#                excerpt = excerpt and '<!--%s-->' % excerpt
+
+#                content = extras.get('content', '')
+#                if conf['md_input']:
+#                    # Using new MD instance works 3x faster than
+#                    # reusing existing one for some reason
+#                    md = markdown.Markdown(extensions=[])
+#                    content = md.convert(content)
+
+#                if conf['fix_urls']:
+#                    content = fix_urls(html2md(content))
+
+#                if 'title' in data:
+#                    content = u"# %s\n\n%s" % (data['title'], content)
+
+#                comments = generate_comments(extras.get('comments', []))
+#                extras = filter(None, [excerpt, content, comments])
+#                f.write('\n' + '\n\n'.join(extras))
+
+#    except Exception as e:
+#        log.error("Error saving data to '%s'" % (file_name))
+#        log.debug(e)
+
+
 def dump(file_name, data, order):
     """Dumps a dictionary to YAML-like text file."""
     try:
@@ -488,41 +548,48 @@ def dump(file_name, data, order):
 
         with codecs.open(file_name, 'w', 'utf-8') as f:
             extras = {}
-            for field in filter(lambda x: x in data, [item for item in order]):
-                if field in ['content', 'comments', 'excerpt']:
-                    # Fields for non-standard processing
-                    extras[field] = data[field]
-                else:
-                    if type(data[field]) == time.struct_time:
-                        value = time.strftime(conf['date_fmt'], data[field])
+
+            def dump_fields():
+                for field in filter(lambda x: x in data, [item for item in order]):
+                    if field in ['content', 'comments', 'excerpt']:
+                        # Fields for non-standard processing
+                        extras[field] = data[field]
                     else:
-                        value = data[field] or ''
-                    f.write(u"%s: %s\n" % (unicode(field), unicode(value)))
+                        if type(data[field]) == time.struct_time:
+                            value = time.strftime(conf['date_fmt'], data[field])
+                        else:
+                            value = data[field] or ''
+                        field_name = FIELD_MAP.get(field, unicode(field))
+                        f.write(u"- %s: %s\n" %
+                                (field_name, unicode(value)))
 
-            if extras:
-                excerpt = extras.get('excerpt', '')
-                excerpt = excerpt and '<!--%s-->' % excerpt
+            f.write(u"# " + data['title'] + '\n\n')
+            dump_fields()
 
-                content = extras.get('content', '')
-                if conf['md_input']:
-                    # Using new MD instance works 3x faster than
-                    # reusing existing one for some reason
-                    md = markdown.Markdown(extensions=[])
-                    content = md.convert(content)
+            excerpt = extras.get('excerpt', '')
+            excerpt = excerpt and '<!--%s-->' % excerpt
 
-                if conf['fix_urls']:
-                    content = fix_urls(html2md(content))
+            content = extras.get('content', '')
+            if conf['md_input']:
+                # Using new MD instance works 3x faster than
+                # reusing existing one for some reason
+                md = markdown.Markdown(extensions=[])
+                content = md.convert(content)
 
-                if 'title' in data:
-                    content = u"# %s\n\n%s" % (data['title'], content)
+            if conf['fix_urls']:
+                content = fix_urls(html2md(content))
 
-                comments = generate_comments(extras.get('comments', []))
-                extras = filter(None, [excerpt, content, comments])
-                f.write('\n' + '\n\n'.join(extras))
+#            if 'title' in data:
+#                content = u"# %s\n\n%s" % (data['title'], content)
+
+            comments = generate_comments(extras.get('comments', []))
+
+            f.write('\n----------------\n\n')
+            f.write('\n\n'.join(filter(None, [excerpt, content, comments])))
 
     except Exception as e:
         log.error("Error saving data to '%s'" % (file_name))
-        log.debug(e)
+        log.exception(e)
 
 
 def store_base_url(channel):
@@ -533,7 +600,7 @@ def store_base_url(channel):
 
 # The Parser
 
-class CustomParser:
+class CustomParser(TreeBuilder):
     def __init__(self):
         self.section_stack = []
         self.channel = {}
@@ -541,14 +608,19 @@ class CustomParser:
         self.item = None
         self.cmnt = None
         self.subj = None
+        self.domain = None
 
-    def start(self, tag, attrib):
-        tag = tag_name(tag)
+    def start(self, tag_, attrib):
+        tag = tag_name(tag_)
+
+        if tag == 'category':
+            self.domain = attrib.get('domain')
+
         if tag == 'channel':
             self.start_section('channel')
 
         elif tag == 'item':
-            self.item = {'comments': []}
+            self.item = {'comments': [], 'categories': [], 'tags': []}
             self.start_section('item')
 
         elif self.item and tag == 'comment':
@@ -561,8 +633,8 @@ class CustomParser:
         else:
             self.subj = None
 
-    def end(self, tag):
-        tag = tag_name(tag)
+    def end(self, tag_):
+        tag = tag_name(tag_)
         if tag == 'comment' and self.cur_section() == 'comment':
             self.end_section()
             self.item['comments'].append(self.cmnt)
@@ -587,7 +659,13 @@ class CustomParser:
                 self.cmnt[self.subj] = data
 
             elif self.cur_section() == 'item':
-                self.item[self.subj] = data
+                if self.subj == 'category':
+                    if self.domain == 'category':
+                        self.item['categories'].append(data)
+                    else:
+                        self.item['tags'].append(data)
+                else:
+                    self.item[self.subj] = data
 
             elif self.cur_section() == 'channel':
                 self.channel[self.subj] = data
